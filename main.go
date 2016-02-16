@@ -67,7 +67,7 @@ func main() {
 		}
 		fmt.Println("server read: ", string(buf[0:n]))
 		time.Sleep(time.Second)
-		n, err = sConn.WriteTo([]byte(string(buf[0:n]) + " " + strconv.FormatInt(int64(i + 1), 10)), addr)
+		n, err = sConn.WriteTo([]byte(string(buf[0:n])+" "+strconv.FormatInt(int64(i+1), 10)), addr)
 		if err != nil {
 			log.Fatalln(err)
 		}
