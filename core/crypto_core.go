@@ -42,7 +42,7 @@ func crypto_verify_32(x, y []byte) int {
 		fmt.Println(d)
 	}
 
-	var result int = int(1 & (uint16(d-1) >> 8)) - 1
+	var result int = int(1&(uint16(d-1)>>8)) - 1
 	return result
 }
 
@@ -238,7 +238,7 @@ func create_request(send_public_key, send_secret_key []byte, recv_public_key []b
 	}
 
 	packet := make([]byte, 1)
-	nonce := make([]byte,cryptobox.CryptoBoxNonceBytes())
+	nonce := make([]byte, cryptobox.CryptoBoxNonceBytes())
 
 	copy(nonce, new_nonce())
 	dataToEncrypt := make([]byte, 1)
@@ -279,7 +279,7 @@ func handle_request(send_public_key, send_secret_key []byte, recv_public_key []b
 	if !public_key_cmp(packet[1:cryptobox.CryptoBoxPublicKeyBytes()+1], send_public_key) {
 		return nil, &CryptoError{"Mismatched public keys!"}
 	}
-	
+
 	copy(recv_public_key, packet[1+cryptobox.CryptoBoxPublicKeyBytes():1+cryptobox.CryptoBoxPublicKeyBytes()*2])
 
 	nonce := packet[1+cryptobox.CryptoBoxPublicKeyBytes()*2 : 1+cryptobox.CryptoBoxPublicKeyBytes()*2+cryptobox.CryptoBoxNonceBytes()]

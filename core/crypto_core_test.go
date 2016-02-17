@@ -24,7 +24,7 @@ func TestEncryptDecrypt(t *testing.T) {
 	sodium.Init()
 	plainText := "Hello world!"
 	public_key := new_symmetric_key()
-//	secret_key := new_symmetric_key()
+	//	secret_key := new_symmetric_key()
 	secret_key2 := new_symmetric_key()
 	nonce := new_nonce()
 
@@ -46,6 +46,7 @@ func TestEncryptDecrypt(t *testing.T) {
 		t.Fail()
 	}
 }
+
 /*
 func TestCreateHandleRequest(t *testing.T) {
 //	t.Skip()
@@ -70,10 +71,10 @@ func TestCreateHandleRequest(t *testing.T) {
 	var request_id byte
 	decryptedData, err := handle_request(public_key2, secret_key2, test_key, encryptedData, &request_id)
 	if err != nil {
-		
+
 		t.Error(err.Error())
 	}
-	
+
 	for k,v := range test_key {
 		if v != public_key1[k] {
 			fmt.Println("Wrong key")
