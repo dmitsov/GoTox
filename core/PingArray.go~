@@ -2,7 +2,6 @@ package core
 
 import (
 	"fmt"
-	"math"
 	"time"
 )
 
@@ -25,6 +24,10 @@ type PingArray struct {
 	last_added   uint32 //index for the last added entry
 	last_deleted uint32 //index for deleting the next entry
 	timeout      uint32 //timeout in microseconds after which the ping entries must be cleared
+}
+
+func isTimeout(t *time.Time, timeout uint64) bool {
+	t.UnixNano()/int64(time.Microsecond)+int64(timeout) >= int64(time.Now().UnixNano()/int64(time.Microsecond))
 }
 
 func (a *PingArray) isTimedout(e *PingArrayEntry) bool {

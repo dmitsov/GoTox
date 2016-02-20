@@ -26,6 +26,10 @@ type PingArray struct {
 	timeout      uint32 //timeout in microseconds after which the ping entries must be cleared
 }
 
+func isTimeout(t *time.Time, timeout uint64) bool {
+	return t.UnixNano()/int64(time.Microsecond)+int64(timeout) >= int64(time.Now().UnixNano()/int64(time.Microsecond))
+}
+
 func (a *PingArray) isTimedout(e *PingArrayEntry) bool {
 	return e.pingTime.UnixNano()/int64(time.Microsecond)+int64(a.timeout) >= int64(time.Now().UnixNano()/int64(time.Microsecond))
 }

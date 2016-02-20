@@ -132,7 +132,6 @@ func SetSocketReuseaddr(c *net.UDPConn) error {
 }
 
 func SetDualStack(c *net.UDPConn) error {
-	
 	f, err := c.File()
 	if err != nil {
 		fmt.Println("Socket not right! Can't set dualstack!")
@@ -150,6 +149,10 @@ func SetDualStack(c *net.UDPConn) error {
 		fmt.Println("Error in setting dualstack ", err)
 	}
 	return err
+}
+
+func InitNetworking(ip net.IP, port uint16) (*Networking_Core, error) {
+	return InitNetworkingCore(ip, port, port+uint16(TOX_PORTRANGE_TO-TOX_PORTRANGE_FROM))
 }
 
 func InitNetworkingCore(ip net.IP, port_from, port_to uint16) (*Networking_Core, error) {

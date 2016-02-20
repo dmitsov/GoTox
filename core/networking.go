@@ -151,6 +151,10 @@ func SetDualStack(c *net.UDPConn) error {
 	return err
 }
 
+func InitNetworking(ip net.IP, port uint16) (*Networking_Core, error) {
+	return InitNetworkingCore(ip, port, port+uint16(TOX_PORTRANGE_TO-TOX_PORTRANGE_FROM))
+}
+
 func InitNetworkingCore(ip net.IP, port_from, port_to uint16) (*Networking_Core, error) {
 	if port_from == 0 && port_to == 0 {
 		port_from = TOX_PORTRANGE_FROM
