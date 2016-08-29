@@ -5,431 +5,557 @@ import (
 	"fmt"
 	"github.com/GoKillers/libsodium-go/cryptobox"
 	"net"
+	"syscall"
+	"binary"
 	"time"
 )
 
-type Ping struct {
+//Get shared key to encrypt/decrypt DHT packet from public_key into shared_key
+//For packets that we receive
+func (d *DHT) DHTGetSharedKeyRecv(public_key []byte) ([]byte, error) {
+	return d.shared_keys_recv.getSharedKey(d.self_secret_key, public_key)
 }
 
-//DHT constants
-//Maximum number of clients stored per friend
-const (
-	MaxFriendClients = 8
-	LClientNodes     = MaxFriendClients
-	LClientLength    = 128
-	LClientList      = LClientLength * LClientNodes // a list of clients mathematically closer to you
-
-	MaxCloseToBootstrapNodes = 8
-	MaxSentNodes             = 4 //max number of nodes to send with send nodes
-	PingTimout               = 5 //ping timeout in seconds
-	DHTPingArraySize         = 512
-
-	PingInterval           = 60 //ping interval in seconds for each node in the ping list
-	PingsMissedNodeGoesBad = 1  //the number of seconds for a non responsive node to become bad
-	PingRoundtrip          = 2
-	BadNodeTimeout         = PingInterval + PingsMissedNodeGoesBad*(PingInterval+PingRoundtrip)
-
-	//network variables for transfer over the network
-	TOX_AF_INET   = 2
-	TOX_AF_INET6  = 10
-	TOX_TCP_INET  = 130
-	TOX_TCP_INET6 = 138
-
-	DHTFakeFriendNumber = 2 //optimization purposes and onion jittering
-	DHTFriendMaxLocks   = 32
-
-	KillNodeTimeout        = BadNodeTimeout + PingInterval
-	GetNodeInterval        = 20
-	MaxPunchingPorts       = 48
-	PunchInterval          = 3
-	MaxNormalPunchingTries = 5
-	NatPingRequest         = 0
-	NatPingResponse        = 1
-	MaxBootstrapTimes      = 5
-
-	PackedNodeSizeIP4 = 39
-	PackedNodeSizeIP6 = 51
-)
-
-type AddrTime struct {
-	addr      *net.UDPAddr
-	timestamp time.Time
+//Get shared key to encrypt/decrypt DHT packet fromt public_key into shared_key
+//for packets that we send
+func (d *DHT) DHTGetSharedKeySent(public_key []byte) ([]byte, error) {
+	return d.shared_keys_sent.getSharedKey(d.self_secret_key, public_key)
 }
 
-//error type for DHT operations
-type DHTError struct {
-	errorMsg string
-}
-
-func (e *DHTError) Error() string {
-	return e.errorMsg
-}
-
-//Structure used for hardening packets in the DHT network
-type Hardening struct {
-	routes_request_ok        bool      //nodes routes request correctly
-	routes_request_timestamp time.Time // last time this was checked
-	routes_request_pingedid  []byte
-
-	send_nodes_ok        bool      //node sends correct send node
-	send_nodes_timestamp time.Time // last time this was checked
-	send_nodes_pingedid  []byte
-
-	testing_requests  bool      //node can be used to test other nodes
-	testing_timestamp time.Time // last time this was checked
-	testing_ping_id   []byte
-}
-
-type IPPTsPng struct {
-	ip_port     *net.UDPAddr
-	timestamp   time.Time
-	last_pinged time.Time
-
-	hardening     Hardening
-	ret_ip_port   *net.UDPAddr
-	ret_timestamp time.Time
-}
-
-type ClientData struct {
-	public_key []byte
-	assoc4     IPPTsPng
-	assoc6     IPPTsPng
-}
-
-type NAT struct {
-	hole_punching   bool //true if currently holepunching
-	punching_index  uint32
-	tries           uint32
-	punching_index2 uint32
-
-	punching_timestamp    time.Time
-	recvNATping_timestamp time.Time
-	NATping_id            uint64
-	NATping_timestamp     time.Time
-}
-
-type NodeFormat struct {
-	public_key []byte
-	ip_port    *net.UDPAddr
-}
-
-type DHTFriendCallback struct {
-	ip_callback func(interface{}, int32, *net.UDPAddr)
-	data        interface{}
-	number      int32
-}
-
-type DHTFriend struct {
-	public_key  []byte
-	client_list [MaxFriendClients]ClientData
-
-	lastGetNode    time.Time //time at which last get_nodes request was sent
-	bootsrap_times uint32    //number of times get_node packets were sent
-
-	nat NAT
-
-	callbacks [DHTFriendMaxLocks]DHTFriendCallback
-
-	to_bootstrap     [MaxSentNodes]NodeFormat
-	num_to_bootstrap uint
-}
-
-const (
-	MaxKeysPerSlot = 4
-	KeysTimeout    = 600
-)
-
-type SharedKey struct {
-	public_key        []byte
-	shared_key        []byte
-	times_requested   uint32
-	stored            bool //field telling us if it's stored or not
-	timeLastRequested time.Time
-}
-
-type Shared_Keys [256 * MaxKeysPerSlot]SharedKey
-
-type CryptoPacketHandlerCallback func(interface{}, *net.UDPAddr, []byte, []byte) error
-
-type CryptoPacketHandler struct {
-	callback CryptoPacketHandlerCallback
-	object   interface{}
-}
-
-type DHT struct {
-	net                   *Networking_Core
-	close_clientlist      [LClientList]ClientData
-	close_lastgetnodes    time.Time //time of last getnodes request
-	close_bootstrap_times uint32
-
-	secret_symmetric_key []byte
-
-	//DHT keypair
-	self_pubclic_key []byte
-	self_secret_key  []byte
-
-	friendList      []DHTFriend
-	loadedNodesList []NodeFormat
-
-	shared_keys_recv Shared_Keys
-	shared_keys_sent Shared_Keys
-
-	ping *Ping
-
-	dht_ping_array        PingArray
-	dht_harden_ping_array PingArray
-
-	assoc *Assoc
-
-	last_run_time time.Time
-
-	cryptopackethandlers [256]CryptoPacketHandler
-
-	to_bootstrap     [MaxCloseToBootstrapNodes]NodeFormat
-	num_to_bootstrap uint
-}
-
-func id_closest(cmp_pk, pk1, pk2 []byte) []byte {
-	for i := 0; i < cryptobox.CryptoBoxPublicKeyBytes(); i++ {
-		d1 := cmp_pk[i] ^ pk1[i]
-		d2 := cmp_pk[i] ^ pk2[i]
-
-		if d1 < d2 {
-			return pk1
-		} else if d1 > d2 {
-			return pk2
-		}
-	}
-
-	return nil
-}
-
-func bit_by_bit_cmp(pk1, pk2 []byte) int {
-	for i := 0; i < cryptobox.CryptoBoxPublicKeyBytes(); i++ {
-		if pk1[i] == pk2[i] {
-			continue
-		}
-
-		for j := 0; j < 8; j++ {
-			if (pk1[i] & (1 << (7 - byte(j)))) != (pk2[i] & (1 << (7 - byte(j)))) {
-				return i*8 + j
-			}
+//helper func: gets the correct friend index
+//in the DHT friend list if there is no friend
+//with the given public_key return -1
+func (d *DHT) friendNum(public_key []byte) int {
+	for i, _ := range d.friendList {
+		if public_key_cmp(d.friendList[i].public_key, public_key) {
+			return i
 		}
 	}
 
 	return -1
 }
 
-/* Getting a shared key from a shared_keys containers and if there is no such key
- * for secret_key,public_key pair generate one
+/*Find MAX_SENT_NODES nodes closest to the public key
  */
-func (s *Shared_Keys) get_shared_key(secret_key, public_key []byte) ([]byte, error) {
-	var num uint32 = (1 << 32) - 1
-	var curr int
+func (d *DHT) getSomewhatCloseNodes(public_key []byte, saFamily byte, isLan bool, wantGood bool) NodeList {
+	nodes := make(NodeList, 0)
+	nodes = getCloseNodesInner(public_key, nodes, d.close_clientlist, saFamily, isLan, false)
 
-	for i := 0; i < MaxKeysPerSlot; i++ {
-		index := int(public_key[30])*MaxKeysPerSlot + i
-		if (*s)[index].stored {
-			if public_key_cmp(public_key, (*s)[index].public_key) {
-				shared_key := make([]byte, cryptobox.CryptoBoxBeforeNmBytes())
-				copy(shared_key, (*s)[index].shared_key)
-				(*s)[index].times_requested++
-				(*s)[index].timeLastRequested = time.Now()
-				return shared_key, nil
-			}
-
-			if num != 0 {
-				if isTimeout(&(*s)[index].timeLastRequested, KeysTimeout) {
-					num = 0
-					curr = index
-				} else {
-					num = (*s)[index].times_requested
-					curr = index
-				}
-			}
-		} else {
-			if num != 0 {
-				num = 0
-				curr = index
-			}
-		}
+	for i, _ := range d.friendList {
+		nodes = getCloseNodesInner(public_key, nodes, d.friendList[i].client_list, saFamily, isLan, false)
 	}
 
-	shared_key, err := encrypt_precompute(public_key, secret_key)
-
-	if err != nil {
-		return nil, err
-	}
-
-	if num != uint32((1<<32)-1) {
-		(*s)[curr].stored = true
-		(*s)[curr].times_requested = 1
-		(*s)[curr].public_key = make([]byte, cryptobox.CryptoBoxPublicKeyBytes())
-		(*s)[curr].shared_key = make([]byte, cryptobox.CryptoBoxBeforeNmBytes())
-		copy((*s)[curr].public_key, public_key)
-		copy((*s)[curr].shared_key, shared_key)
-		(*s)[curr].timeLastRequested = time.Now()
-	}
-
-	return shared_key, nil
+	return nodes
 }
 
-//Get shared key to encrypt/decrypt DHT packet from public_key into shared_key
-//For packets that we receive
-func (d *DHT) DHTGetSharedKeyRecv(public_key []byte) ([]byte, error) {
-	return d.shared_keys_recv.get_shared_key(d.self_secret_key, public_key)
-}
-
-//Get shared key to encrypt/decrypt DHT packet fromt public_key into shared_key
-//for packets that we send
-func (d *DHT) DHTGetSharedKeySent(public_key []byte) ([]byte, error) {
-	return d.shared_keys_sent.get_shared_key(d.self_secret_key, public_key)
-}
-
-func toNetFamily(ip net.IP) (int, error) {
-	if len(ip) == net.IPv4len {
-		return TOX_AF_INET, nil
-	} else if len(ip) == net.IPv6len {
-		return TOX_AF_INET6, nil
+/* Replace a first bad (or empty) node with this one
+ *  or replace a possibly bad node (tests failed or not done yet)
+ *  that is further than any other in the list
+ *  from the cmpPublicKey
+ *  or replace a good node that is further
+ *  than any other in the list from the cmpPublicKey
+ *  and further than publicKey
+ *
+ * Do not replace any node if the list has no bad or possibly bad nodes
+ *  and all nodes in the list are closer to cmpPublicKey
+ *  than publicKey.
+ *
+ *  returns nill when the item was stored, error otherwise */
+func (cl ClientDataList) ReplaceAll(publicKey, cmpPublicKey []byte, ipPort *net.UDPAddr) error {
+	if len(ipPort.IP) != net.IPv4len && len(ipPort.IP) != net.IPv6len {
+		return &DHTError{"Wrong IP address"}
 	}
 
-	return 0, &NetError{"Wrong ip length", ip, 0}
-}
-
-func packed_node_size(ip net.IP) (int, error) {
-	switch {
-	case len(ip) == net.IPv4len:
-		return PackedNodeSizeIP4, nil
-	case len(ip) == net.IPv6len:
-		return PackedNodeSizeIP6, nil
+	if !isOkStoreNode(&cl[0], publicKey, cmpPublickKey) && !isOkStoreNode(&cl[1], publicKey, cmpPublicKey) {
+		return &DHTError{"Could not store public key in cliend data list"}
 	}
 
-	return 0, &NetError{"Wrong ip length", ip, 0}
-}
+	cl.clientListSort(cmpPublicKey)
 
-//function for packing nodes in network format
-func pack_nodes(nodes []NodeFormat) ([]byte, error) {
-	var data []byte = make([]byte, 0)
+	var ipptrWrite, ipptrClear *IPPTsPng
 
-	for i, _ := range nodes {
-		var net_family byte
-		switch {
-		case len(nodes[i].ip_port.IP) == 4:
-			net_family = TOX_AF_INET
-		case len(nodes[i].ip_port.IP) == 16:
-			net_family = TOX_AF_INET6
-		default:
-			return nil, &DHTError{"Wrong ip type in nodes!" + fmt.Sprintf("%v", nodes[i].ip_port.IP)}
-		}
-
-		packedNode := make([]byte, 1)
-		port := make([]byte, 2)
-		binary.LittleEndian.PutUint16(port, uint16(nodes[i].ip_port.Port))
-
-		packedNode[0] = net_family
-		packedNode = append(packedNode, nodes[i].ip_port.IP...)
-		packedNode = append(packedNode, port...)
-		packedNode = append(packedNode, nodes[i].public_key...)
-
-		data = append(data, packedNode...)
+	if len(ipPort.IP) == net.IPv4len {
+		ipptrWrite = &cl[0].assoc6
+		ipptrClear = &cl[0].assoc4
+	} else {
+		ipptrWrite = &cl[0].assoc4
+		ipptrClear = &cl[0].assoc6
 	}
 
-	return data, nil
+	copy(cl[0].public_key, publicKey)
+	ipptrWrite.ip_port = ipPort
+	ipptrWrite.timestamp = time.Now().Unix()
+
+	ipReset(ipptrWrite.retIpPort.IP)
+	ipptrWrite.RetIpPort.Port = 0
+	ipptrWrite.retTimestamp = 0
+
+	return nil
 }
 
-//function for unpacking nodes
-func unpack_nodes(data []byte) ([]NodeFormat, error) {
-	var len_processed uint32
-	var nodes []NodeFormat = make([]NodeFormat, 0)
+func (dht *DHT) CanAddNodeToList(publicKey []byte, ipPort *net.UDPAddr) bool {
+	index := bitByBitCmp(publicKey, dht.self_public_key)
 
-	for len_processed < uint32(len(data)) {
-		var ipSize int
-		var size uint32
-		switch {
-		case data[len_processed] == TOX_AF_INET:
-			ipSize = net.IPv4len
-			size = PackedNodeSizeIP4
-		case data[len_processed] == TOX_AF_INET6:
-			size = PackedNodeSizeIP6
-			ipSize = net.IPv6len
-		default:
-			return nil, &DHTError{"Wrong ip family type: " + fmt.Sprintf("%d", data[len_processed])}
-		}
-
-		if len_processed+size > uint32(len(data)) {
-			return nil, &DHTError{"Node size overflowing data len"}
-		}
-
-		var node NodeFormat
-		node.ip_port = &net.UDPAddr{}
-		node.public_key = make([]byte, cryptobox.CryptoBoxPublicKeyBytes())
-
-		//here we're checking to see if the node fits in the remaining byte data
-
-		node.ip_port.IP = make([]byte, ipSize)
-		port := binary.LittleEndian.Uint16(data[len_processed+1+net.IPv4len : len_processed+1+uint32(ipSize)+2])
-
-		copy(node.ip_port.IP, data[len_processed+1:len_processed+1+uint32(ipSize)])
-		node.ip_port.Port = int(port)
-		copy(node.public_key, data[len_processed+1+net.IPv4len+2:len_processed+1+net.IPv4len+2+uint32(cryptobox.CryptoBoxPublicKeyBytes())])
-		nodes = append(nodes, node)
-
-		len_processed += size
+	if index > LClientLength {
+		index = LClientLength - 1
 	}
 
-	return nodes, nil
-}
-
-type ClientDataList []ClientData
-
-func ipport_equal(p1,p2 *net.UDPAddr) bool {
-	if len(p1.IP) != len(p2.IP) {
-		return false
-	}	
-	
-	for i,_ := range p1.IP {
-		if p1.IP[i]	!= p2.IP[i] {
-			return false
-		}
-	}
-
-	return p1.Port == p2.Port
-}
-
-
-func (list ClientDataList) ClientOrIPPortInList(public_key []byte,ip_port *net.UDPAddr)(,bool){
-	for i,_ := range list {
-		if public_key_cmp(list[i].public_key,public_key){
-			if len(ip_port.IP) == net.IPv4len {
-				list[i].assoc4.ip_port.IP = make([]byte,net.IPv4len)
-				copy(list[i].assoc4.ip_port.IP,ip_port.IP)
-				list[i].assoc4.ip_port.Port = ip_port.Port
-				list[i].assoc4.timestamp = time.Now()
-			} else if len(ip_port.IP) == net.IPv6len {
-				list[i].assoc6.ip_port.IP = make([]byte,net.IPv6len)
-				copy(list[i].assoc6.ip_port.IP,ip_port.IP)
-				list[i].assoc6.ip_port.Port = ip_port.Port
-				list[i].assoc6.timestamp = time.Now()
-			}
-			
-			return true
-		}
-	}
-
-	for i,_ := range list {
-		if len(ip_port.IP) == net.IPv4len && ipport_equal(list[i].assoc4.ip_port,ip_port){
-			list[i].assoc4.timestamp = time.Now()
-			copy(public_key,list[i].public_key)
-			list[i].assoc6 = IPPTsPng{}
-			return true
-		} else len(ip_port.IP) == net.IPv6len && ipport_equal(list.assoc6.ip_port,ip_port) {
-			list[i].assoc6.timestamp = time.Now()
-			copy(public_key,list[i].public_key)
-			list[i].assoc4 = IPPTsPng{}
+	for i := 0; i < LClientLength; i++ {
+		client := &dht.closeClientList[(index*LClientLength)+i]
+		if isTimeout(client.assoc4.timestamp, BadNodeTimeout) && isTimeout(client.assoc6.timestamp, BadNodeTimeout) {
 			return true
 		}
 	}
 
 	return false
+}
+
+func (dht *DHT) CanAddNodeToList(publicKey []byte, ipPort *net.UDPAddr) {
+	index := bitByBitCmp(publicKey, dht.self_public_key)
+
+	if index > LClientLength {
+		index = LClientLength - 1
+	}
+
+	for i := 0; i < LClientLength; i++ {
+		client := &dht.closeClientList[(index*LClientLength)+i]
+		if isTimeout(client.assoc4.timestamp, BadNodeTimeout) && isTimeout(client.assoc6.timestamp, BadNodeTimeout) {
+			var ipptrWrite, ipptrClear *IPPTsPng
+
+			if len(ipPort.IP) == net.IPv4len {
+				ipptrWrite = &cl[0].assoc6
+				ipptrClear = &cl[0].assoc4
+			} else {
+				ipptrWrite = &cl[0].assoc4
+				ipptrClear = &cl[0].assoc6
+			}
+
+			copy(cl[0].public_key, publicKey)
+			ipptrWrite.ip_port = ipPort
+			ipptrWrite.timestamp = time.Now().Unix()
+
+			ipReset(ipptrWrite.retIpPort.IP)
+			ipptrWrite.RetIpPort.Port = 0
+			ipptrWrite.retTimestamp = 0
+		}
+	}
+
+}
+
+//Check if the node obtained with GetNodes with publicKey should be pinged
+//It should be called after AddToLists. Returns true if it should be pinged
+//and false when it shouldn't be pinged
+func (dht *DHT) PingNodesFromGetNodes(publicKey []byte, ipPort *net.UDPAddr) bool {
+	var retValue bool
+	if dht.CanAddNodeToList(publicKey, ipPort) {
+		retValue = true
+	}
+
+	if retValue && !dht.toBootstrap.ClientInNodeList(publicKey) {
+		if len(dht.toBootstrap) < MaxCloseToBootstrapNodes {
+			newNode := NodeFormat{publicKey, ipPort}
+			dht.toBootstrap = append(dht.toBootsrap, newNode)
+		} else {
+			dht.ToBootstrap.AddToList(publicKey, ipPort, dht.selfPublicKey)
+		}
+	}
+
+	for i, _ := range dht.friendsList {
+		friend := &dht.friendsList[i]
+
+		ok := friend.clientList[1].StoreNodeOk(publicKey, friend.publicKey) || friend.clientList[0].StoreNodeOk(publicKey, friend.publicKey)
+
+		if ok && !friend.toBootstrap.ClientInNodeList(publicKey) &&
+			friend.clientList.isPkInClientList(publicKey, ipPort) {
+			if len(friend.toBootstrap) < MaxSentNodes {
+				newNode := NodeFormat{publicKey, ipPort}
+				friend.toBootstrap = append(dht.toBootsrap, newNode)
+			} else {
+				friend.toBootstrap.AddToList(publicKey, ipPort, friend.publicKey)
+			}
+
+			retValue = true
+		}
+	}
+
+	return retValue
+}
+
+func (dht *DHT) AddToList(publicKey []byte, ipPort *net.UDPAddr) (uint32, error) {
+	var used uint32
+	if len(ipPort.IP) == net.IPv6len {
+		ip4 := ipPort.IP.ToIP4()
+		if ip4 != nil {
+			ipPort.IP = ip4
+		}
+	}
+
+	if dht.closeClientList.ClientOrIpPortInList(publicKey, ipPort) {
+		if err := dht.AddToClose(publicKey, ipPort); err == nil {
+			used++
+		}
+	} else {
+		used++
+	}
+
+	var friendFoundIp *DHTFriend
+
+	for i, _ := range dht.friendsList {
+		if dht.freindList[i].clientList.ClientOrIpPortInList(publicKey, ipPort) {
+			if err := dht.friendList[i].clientList.ReplaceAll(publicKey, ipPort, dht.friendList[i].publicKey); err == nil {
+				friend := &dht.friendsList[i]
+				if publicKeyCmp(publicKey, friend.publicKey) {
+					friendFoundIp = friend
+				}
+
+				used
+			} else {
+				return 0, &DHTError{"Error in adding to dht lists: " + err.Error()}
+			}
+		} else {
+			friend := &dht.friendList[i]
+			if publicKeyCmp(publicKey, friend.publicKey) {
+				friendFoundIP = friend
+			}
+			used++
+		}
+	}
+
+	if friendFoundIp != nil {
+		for i, _ := range friendFoundIP.callbacks {
+			if friendFoundIp.callbacks[i].ipCallback != nil {
+				friendFoundIp.callbacks[i].ipCallback(friendFoundIp.callbacks[i].data, friendFoundIp.callbacks[i].number, ipPort)
+			}
+		}
+	}
+
+	//TODO: finish this part of the code
+	if EnableAssocDHT {
+		if dht.assoc != nil {
+			// have to add some code here for this but I have no idea what to do
+		}
+	}
+	return used
+}
+
+/* Updates the friend ips if the returned publicKey is a friend of DHT
+ * nodePublicKey is the node that send us the new data
+ */
+func (dht *DHT) returnedIpPorts(ipPort *net.UDPAddr, publicKey, nodePublicKey []byte) {
+	var used bool
+
+	toIpv4(ipPort)
+	currentTime := time.Now()
+
+	if idEqual(publicKey, dht.selfPublicKey) {
+		for i, _ := range dht.closeClientList {
+			if idEqual(publicKey, dht.closeClientList[i].publicKey) {
+				if len(ipPort.IP) == net.IPv4len {
+					dht.closeClientList[i].assoc4.retIpPort = ipPort
+					dht.closeClientList[i].assoc4.retTimestamp = currentTime
+				} else if len(ipPort.IP) == net.IPv6len {
+					dht.closeClientList[i].assoc6.retIpPort = ipPort
+					dht.closeClientList[i].assoc6.retTimestamp = currentTime
+				}
+
+				used = true
+				break
+			}
+		}
+	} else {
+		for i := 0; i < len(dht.friendList) && !used; i++ {
+			if idEqual(publicKey, dht.friendList[i].publicKey) {
+				for j, _ := range dht.friendList[i].clientList {
+					if idEqual(nodePublicKey, dht.friendList[i].clientList[j].publicKey) {
+						if len(ipPort.IP) == net.IPv4len {
+							dht.closeClientList[i].assoc4.retIpPort = ipPort
+							dht.closeClientList[i].assoc4.retTimestamp = currentTime
+						} else if len(ipPort.IP) == net.IPv6len {
+							dht.closeClientList[i].assoc6.retIpPort = ipPort
+							dht.closeClientList[i].assoc6.retTimestamp = currentTime
+						}
+
+						used = true
+						break
+					}
+				}
+			}
+		}
+	}
+
+	if EnableAssocDHT {
+		if dht.assoc != nil {
+			//TODO: write code for this part
+		}
+	}
+}
+
+//helper function for packing sender node in binary format
+func packNodeFormat(publicKey []byte, ipPort *net.UDPAddr) []byte {
+	plainMessage := make([]byte, NodeFormatSize)
+
+	copy(plainMessage[:cryptobox.CryptoBoxPublicKeyBytes], publicKey)
+	if ipPort.IP.IsIPv4() {
+		plainMessage[cryptobox.CryptoBoxPublicKeyBytes] = syscall.AF_INET
+	} else {
+		plainMessage[cryptobox.CryptoBoxPublicKeyBytes] = syscall.AF_INET6
+	}
+
+	ip := ipPort.IP.ToIPv6()
+	copy(plainMessage[cryptobox.CryptoBoxPublicKeyBytes + 1 : cryptobox.CryptoBoxPublicKeyBytes + 1 + net.IPv6len], ip)
+	plainMessage[cryptobox.CryptoBoxPublicKeyBytes + 1 + net.IPv6len] = byte(ipPort.Port & 0x00FF)
+	plainMessage[cryptobox.CryptoBoxPublicKeyBytes + 1 + net.IPv6len + 1] = byte((ipPort.Port & 0xFF00) >> 8)
+	
+	return plainMessage
+}
+
+//Send a DHT getnodes request
+func (dht *DHT) GetNodes(clientID, publicKey []byte, ipPort *net.UDPAddr, sendbackNode *NodeFormat) error {
+	if idEqual(dht.selfPublicKey, publicKey) {
+		return &DHTError{"Can't send to getnodes request to self"}	
+	}
+
+	plainMessage := packNodeFormat(publicKey, ipPort)
+	
+	var pingId uint64
+	if sendbackNode == nil {
+		plainMessage = append(plainMessage, packNodeFormat(sendbackNode.publicKey, sendbackNode.ipPort))
+		pingId = dht.dhtHardenPingArray.Add(plainMessage)
+	} else {
+		pingId = dht.dhtPingArray.Add(plainMessage)
+	}
+	
+	if pingId == 0 {
+		return &DHTError {"Couldn't add message to ping array"}
+	}	
+
+	message := make([]byte, 36) // the size of the message len(clientId) + 4 bytes of the pingid
+	pingIdBytes := make([]byte, 8)
+	binary.PutUvariant(pingIdBytes, pingId)
+			
+	data := make([]byte,1 + cryptobox.CryptoBoxPublicKeyByts + cryptobox.CryptoBoxNonceBytes + len(message) + cryptobox.CryptoBoxMacBytes)
+		
+
+	copy(message[:cryptobox.CryptoBoxPublicKeyBytes], clientId)
+	copy(message[cryptobox.CryptoBoxPublicKeyBytes:], pingId)
+			
+	sharedKey := dht.GetSharedKeySent(publicKey)
+	
+	nonce := new_nonce()	
+	
+	encryptedData,err := encrypt_data_symmetric(sharedKey, nonce, message)
+
+	if err != nil {
+		return &DHTError{ "Error in getnodes: " + err.Error() }
+	}
+
+	data[0] = NetPacketGetNodes
+	copy(data[1:cryptobox.CryptoBoxPublicKeyBytes], dht.selfPublicKey)
+	copy(data[1 + cryptobox.CryptoBoxPublicKeyBytes : 1 + cryptobox.CryptoBoxPublicKeyBytes + cryptobox.CryptoBoxNonceBytes], nonce)
+	copy(data[1 + cryptobox.CryptoBoxPublicKeyBytes + cryptobox.CryptoBoxNonceBytes:], encryptedData)
+
+	err = dht.net.SendPacket(ipPort, data)	
+	if err != nil {
+		return &DHTError {"Error in sending getnodes request: " + err.Error()}
+	}
+	return nil
+}
+
+//Send a sendnodes response to IPv6 nodes
+func (dht *DHT) SendNodesIPv6(publicKey, clientId []byte, sharedEncryptionKey []byte, sendbackData []byte, ipPort *net.UDPAddr) error {
+	if idEqual(dht.selfPublickey, publicKey) {
+		return &DHTError{"Can't send a response "}
+	}		
+
+	if len(sendbackData) != 8 {
+		return &DHTError{"sendbackData should be of length of 8"}
+	}
+
+	data := make([]byte, 1 + cryptobox.CryptoBoxPublicKeyBytes + cryptobox.CryptoBoxNonceBytes + NodeFormatSize * MaxSentNodes + 8 + cryptobox.CryptoBoxMacBytes)
+
+	nodeList := dht.GetCloseNodes(clientId, 0, isLan(ipPort.IP))
+	plain = make([]byte, 1)
+	
+	nonce := new_nonce()
+
+	var nodeLength int
+	if len(nodeList) > 0 {
+		packedNodes,err := packNodes(nodeList)	
+		if err != nil {
+			return &DHTError{"DHT error:" + err.Error()}
+		}
+		
+		if len(packedNodes) == 0 {
+			return &DHTError{"DHT error: No nodes to send back"}
+		}
+		
+		plain = append(plain, packedNodes)
+	}
+	
+	plain[0] = len(nodeList)
+	plain = append(plain, sendbackData)
+
+	encryptedData := encrypt_data_symmetric(sharedEncryptionKey, nonce, plain)
+	
+	//now we check to see if the encryption is alright
+	if len(encryptedData) != 1 + len(sendbackData) + len(plain) + cryptobox.CryptoBoxMacBytes {
+		return &DHTError{"Error in encryption!"}
+	}
+
+	data[0] = NetPacketSendNodesIPv6
+	copy(data[1 : 1 + cryptobox.CryptoBoxPublicKeyBytes], dht.selfPublicKey)
+	copy(data[1 + cryptobox.CryptoBoxPublicKeyBytes : 1 + cryptobox.CryptoBoxPublicKeyBytes + cryptobox.CryptoBoxNonceBytes], nonce)
+	copy(data[1 + cryptobox.CryptoBoxPublicKeyBytes + cryptobox.CryptoBoxNonceBytes:],encryptedData)
+
+	err := dht.net.SendPacket(ipPort, data)
+
+	if err != nil {
+		return &DHTError{"DHT error: " + err.Error()}
+	}
+
+	return nil
+}
+
+//have to do something for error handling here
+func (dht *DHT) handleGetNodes(data []byte, ip net.IP, port uint16){
+	if len(data) == 1 + cryptobox.CryptoBoxPublicKeyBytes + cryptobox.CryptoBoxNonceBytes + cryptobox.CryptoBoxPublicKeyBytes + 8 
+				+ cryptobox.CryptoBoxMacBytes {
+		return
+	}
+
+	if idEqual(dht.selfPublicKey, data[1 : 1 + cryptobox.CryptoBoxPublicKeyBytes]) {
+		return
+	}
+
+	sharedKey := dht.getSharedKeyRecv(data[1 : 1 + cryptobox.CryptoBoxPublicKeyBytes])
+	
+	plainMessage := decrypt_data_symmetric(sharedKey, 
+							   data[1 + cryptobox.CryptoBoxPublicKeyBytes : 1 + cryptobox.CryptoBoxPublicKeyBytes + 									cryptobox.CryptoBoxNonceBytes], 
+							   data[1 + cryptobox.CryptoBoxPublicKeyBytes + cryptobox.CryptoBoxNonceBytes:])
+	
+	if len(plainMessage) != cryptobox.CryptoBoxPublicKeyBytes + 8 {
+		return
+	}
+
+	sourceIPPort := &net.UDPAddr{ip, port}
+	
+	err := dht.SendNodesIPv6(data[1 : 1 + cryptobox.CryptoBoxPublicKeyBytes], plainMessage[:cryptobox.CryptoBoxPublicKeyBytes], sourceIPPort, sharedKey)
+	
+	if err != nil {
+		return	
+	}
+
+	dht.ping.Add(data[1:], sourceIPPort)
+}
+
+//possible problems: byte slice to IP might be faulty
+func unpackNode(data []byte) *NodeFormat {
+	publicKey := data[:cryptobox.CryptoBoxPublicKeyBytes]
+	ip := net.IP(data[cryptobox.CryptoBoxPublicKeyBytes + 1: cryptobox.CryptoBoxPublicKeyBytes + 17])
+
+	if data[cryptobox.CryptoBoxPublicKeyBytes] == syscall.AF_INET {
+		ip = ip.ToIPv4()
+	}
+
+	port := uint16(data[cryptobox.CryptoBoxPublicKeyBytes + 17] | data[cryptobox.CryptoBoxPublicKeyBytes + 18] << 8)
+	
+	return &NodeFormat{publicKey, &net.UDPAddr{ip, port} }
+}
+
+func (dht *DHT) canSendNode(publicKey []byte, ipPort *net.UDPAddr, pingId uint64, sendbackNode *NodeFormat) bool {
+	data := dht.pingArray(pingId)
+	
+	if len(data) == 2 * NodeFormatSize {
+		node := unpackNode(data[NodeFormatSize:])
+		sendbackNode.ipPort = node.ipPort;
+		sendbackNode.publicKey = node.publicKey
+	} else if len(data) != NodeFormatSize {
+		return false
+	}
+
+	test := unpackNode(data)
+	if !ipPortEqual(test.ipPort, ipPort) || publicKeyCmp(publicKey, test.publicKey) {
+		return false
+	}
+
+	return true
+}
+
+func (dht *DHT) sendHardeningGetNodeResponse(sendToNode *NodeFormat, queriedClientId []byte, nodesData []byte) error {
+
+	return nil
+}
+
+//core handle function for the sendnodes response
+func (dht *DHT) handleSendNodesCore(ipPort *net.UDPAddr, data []byte) ([]NodeFormat, error) {
+	clientIdSize := 1 + cryptobox.CryptoBoxPublicKeyBytes + cryptobox.CryptoBoxNonceBytes + 8 + cryptobox.CryptoBoxMacBytes	
+
+	//needed checks	
+	if len(data) < clientIdSize {
+		return nil, &DHTError{"Data length is too small"}
+	} 
+
+	dataSize := len(data) - clientIdSize
+	
+	if dataSize == 0 {
+		return nil, &DHTError{"There is no data to decrypt"}
+	}	
+
+	if dataSize > NodeFormatSize * MaxSendNodes {
+		return nil, &DHTError{"The data size is too big"}
+	}
+
+	sharedKey := dht.getSharedKeySent(data[1:1 + cryptobox.CryptoBoxPublicKeyBytes])
+
+	plainMessage := decrypt_data_symmetric(sharedKey, data[1 + cryptobox.CryptoBoxPublicKeyBytes: 1 + cryptobox.CryptoBoxPublicKeyBytes + cryptobox.CryptoBoxNonceBytes], data[1 + cryptobox.CryptoBoxPublicKeyBytes + cryptobox.CryptoBoxNonceBytes:])
+	
+	if len(plainMessage) != dataSize + 1 + 8 {
+		return nil, &DHTError{"Wrong size of the decrypted string"}
+	}
+
+	var pingIdArray []byte = plainMessage[1 + dataSize : 1 + dataSize + 8]
+	var pingId uint64
+	for i, v := range pingIdArray {
+		pingId |= v << (i * 8)
+	}
+
+	sendBackNode := &NodeFormat{}
+	
+	if !canSendNode(data[1 : 1 + cryptobox.CryptoBoxPublicKeyBytes], ipPort, sendBackNode) {
+		return &DHTError{"Can't get sendback node"}
+	}
+
+	plainNodes := unpackNodes(plainMessage[1:], plainMessage[0], dataSize)
+	
+	if len(plainNodes) * NodeFormatSize != dataSize || plainMessage[0] != len(plainNodes) {
+		return &DHTError{"Wrong number of nodes"}
+	}
+
+	dht.AddToList(ipPort, data[1: 1 + cryptobox.CryptoBoxPublicKeyBytes])
+	
+	dht.sendHardeningGetNodeRes(sendBackNode, data[1: 1 + cryptobox.CryptoBoxPublicKeyBytes])
+
+	return plainNodes, nil
+}
+
+//handle sendnodes response 
+func (dht *DHT) handleSendNodesIPv6(data []byte, ipPort *net.UDPAddr) {
+	plainNodes,err := handleSendNodesCore(ipPort, data)
+
+	if err != nil {
+		fmt.Println(err.Error())
+		return
+	}
+
+	if len(plainNodes) {
+		return
+	}
+
+	for i, _ := range plainNodes {
+		if ipPortIsSet(plainNodes[i].ipPort {
+			dht.pingNodeFromGetNodesOk(plainNodes[i].publicKey, plainNodes[i].ipPort)
+			dht.returnedIpPorts(plainNodes[i].ipPort, plainNodes[i].publicKey, data[1: 1 + cryptobox.CryptoBoxPublicKeyBytes])
+		}
+	}
 }
 

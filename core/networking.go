@@ -8,71 +8,73 @@ import (
 	"time"
 )
 
-const (
-	INVALID_SOCKET = 0
-)
+const InvalidSocket = 0
 
 const (
-	MAX_UDP_PACKET_SIZE = 2048
+	MaxUdpPacketSize = 2048
 
 	//packet identifiers
-	NET_PACKET_PING_REQUEST    = 0  /* Ping request packet ID. */
-	NET_PACKET_PING_RESPONSE   = 1  /* Ping response packet ID. */
-	NET_PACKET_GET_NODES       = 2  /* Get nodes request packet ID. */
-	NET_PACKET_SEND_NODES_IPV6 = 4  /* Send nodes response packet ID for other addresses. */
-	NET_PACKET_COOKIE_REQUEST  = 24 /* Cookie request packet */
-	NET_PACKET_COOKIE_RESPONSE = 25 /* Cookie response packet */
-	NET_PACKET_CRYPTO_HS       = 26 /* Crypto handshake packet */
-	NET_PACKET_CRYPTO_DATA     = 27 /* Crypto data packet */
-	NET_PACKET_CRYPTO          = 32 /* Encrypted data packet ID. */
-	NET_PACKET_LAN_DISCOVERY   = 33 /* LAN discovery packet ID. */
+	NetPacketPingRequest    = 0  /* Ping request packet ID. */
+	NetPacketPingResponse   = 1  /* Ping response packet ID. */
+	NetPacketGetNodes       = 2  /* Get nodes request packet ID. */
+	NetPacketSendNodesIPv6  = 4  /* Send nodes response packet ID for other addresses. */
+	NetPacketCookieRequest  = 24 /* Cookie request packet */
+	NetPacketCookieResponse = 25 /* Cookie response packet */
+	NetPacketCryptoHS       = 26 /* Crypto handshake packet */
+	NetPacketCryptoData     = 27 /* Crypto data packet */
+	NetPacketCrypto         = 32 /* Encrypted data packet ID. */
+	NetPacketLANDiscovery   = 33 /* LAN discovery packet ID. */
 )
 
 //hardening packets
 const (
-	NET_PACKET_ONION_SEND_INITIAL = 128
-	NET_PACKET_ONION_SEND_1       = 129
-	NET_PACKET_ONION_SEND_2       = 130
+	NetPacketOnionSendInitial = 128
+	NetPacketOnionSend1       = 129
+	NetPacketOnionSend2       = 130
 
-	NET_PACKET_ANNOUNCE_REQUEST    = 131
-	NET_PACKET_ANNOUNCE_RESPONSE   = 132
-	NET_PACKET_ONION_DATA_REQUEST  = 133
-	NET_PACKET_ONION_DATA_RESPONSE = 134
+	NetPacketAnnounceRequest   = 131
+	NetPacketAnnounceResponse  = 132
+	NetPacketOnionDataRequest  = 133
+	NetPacketOnionDataResponse = 134
 
-	NET_PACKET_ONION_RECV_3 = 140
-	NET_PACKET_ONION_RECV_2 = 141
-	NET_PACKET_ONION_RECV_1 = 142
+	NetPacketOnionRecv3 = 140
+	NetPacketOnionRecv2 = 141
+	NetPacketOnionRecv1 = 142
 
 	/* Only used for bootstrap nodes */
-	BOOTSTRAP_INFO_PACKET_ID = 240
+	BootstrapInfoPacketID = 240
 
-	TOX_PORTRANGE_FROM = 33445
-	TOX_PORTRANGE_TO   = 33545
-	TOX_PORT_DEFAULT   = TOX_PORTRANGE_FROM
+	ToxPortrangeFrom = 33445
+	ToxPortrangeTo   = 33545
+	ToxPortDefault   = ToxPortrangeFrom
 )
 
 const (
-	TCP_ONION_FAMILY = syscall.AF_INET6 + 1
-	TCP_INET         = syscall.AF_INET6 + 2
-	TCP_INET6        = syscall.AF_INET6 + 3
-	TCP_FAMILY       = syscall.AF_INET6 + 4
+	TcpOnionFamily = syscall.AF_INET6 + 1
+	TcpInet        = syscall.AF_INET6 + 2
+	TcpInet6       = syscall.AF_INET6 + 3
+	TcpFamily      = syscall.AF_INET6 + 4
 )
 
-type PackageHandler func(object interface{}, data []byte, ip net.IP, port uint16)
-
-type Handler struct {
-	handlerFunc PackageHandler
-	object      interface{}
-}
+type PackageHandler func(data []byte, ip net.IP, port uint16)
 
 type Networking_Core struct {
-	handlers map[byte]Handler
-	coreAddr *net.UDPAddr
-	ip       net.IP
-	port     uint16
-	Conn     *net.UDPConn
-	wg       sync.WaitGroup
-	isClosed bool
+	isPollingStarted bool
+	handlers         map[byte]PackageHandler
+	coreAddr         *net.UDPAddr
+	ip               net.IP
+	port             uint16
+	Conn             *net.UDPConn
+	wg               sync.WaitGroup
+	mutx             sync.RWMutex
+	killChan         chan struct{}
+	killComplete     chan struct{}
+}
+
+type receivedPacket struct {
+	data []byte
+	ip   net.IP
+	port uint16
 }
 
 type NetError struct {
@@ -91,39 +93,45 @@ func IsValidSock(c *net.UDPConn) bool {
 		fmt.Println("Socket not right")
 		return false
 	}
-	return int(f.Fd()) == INVALID_SOCKET
+	return int(f.Fd()) == InvalidSocket
+}
+
+func IsIPv4(ip net.IP) bool {
+	if len(ip) != net.IPv4len || len(ip) != net.IPv6len {
+		return false
+	}
+
+	return ip.To4() != nil
 }
 
 var (
-	start_time time.Time
+	startTime time.Time
 )
 
-func initiate_monotonic_time() {
-	start_time = time.Now()
+func InitiateMonotonicTime() {
+	startTime = time.Now()
 }
 
-func get_time_monotonic() uint64 {
-	var nanoSeconds int64 = time.Since(start_time).Nanoseconds()
+//
+func GetTimeMonotonic() uint64 {
+	var nanoSeconds int64 = time.Since(startTime).Nanoseconds()
 	if nanoSeconds < 0 {
 		return 0
 	}
 
-	var milisecondsMono int64 = nanoSeconds / int64(time.Millisecond)
-	return uint64(milisecondsMono)
+	var millisecondsMono int64 = nanoSeconds / int64(time.Millisecond)
+	return uint64(millisecondsMono)
 }
 
-func get_current_time() uint64 {
+//current time in microseconds
+//have to check Tox lib to be sure
+func GetCurrentTime() uint64 {
 	return uint64(time.Now().UnixNano() / int64(time.Microsecond))
 }
 
-func SetSocketReuseaddr(c *net.UDPConn) error {
-	f, err := c.File()
-	if err != nil {
-		fmt.Println("Socket not right! Can't set reuseaddr!")
-		return err
-	}
-	sock := int(f.Fd())
-	err = syscall.SetsockoptByte(sock, syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+func SetSocketReuseaddr(sock int) error {
+	var value int = 1
+	err := syscall.SetsockoptInt(sock, syscall.SOL_SOCKET, syscall.SO_REUSEADDR, value)
 	if err != nil {
 		fmt.Printf("Error occured in setting SO_REUSEADDR: ", err)
 	}
@@ -131,20 +139,16 @@ func SetSocketReuseaddr(c *net.UDPConn) error {
 	return err
 }
 
-func SetDualStack(c *net.UDPConn) error {
-	f, err := c.File()
-	if err != nil {
-		fmt.Println("Socket not right! Can't set dualstack!")
-		return err
-	}
-	sock := int(f.Fd())
+func SetDualStack(sock int) error {
+
 	var val int
-	val, err = syscall.GetsockoptInt(sock, syscall.IPPROTO_IPV6, syscall.IPPROTO_IPV6)
+	val, err := syscall.GetsockoptInt(sock, syscall.IPPROTO_IPV6, syscall.IPPROTO_IPV6)
 	if err == nil && val == 0 {
 		return nil
 	}
+	fmt.Println("Dual stack error ", err)
 
-	err = syscall.SetsockoptByte(sock, syscall.IPPROTO_IPV6, syscall.IPV6_V6ONLY, 0)
+	err = syscall.SetsockoptInt(sock, syscall.IPPROTO_IPV6, syscall.IPV6_V6ONLY, 0)
 	if err != nil {
 		fmt.Println("Error in setting dualstack ", err)
 	}
@@ -152,13 +156,13 @@ func SetDualStack(c *net.UDPConn) error {
 }
 
 func InitNetworking(ip net.IP, port uint16) (*Networking_Core, error) {
-	return InitNetworkingCore(ip, port, port+uint16(TOX_PORTRANGE_TO-TOX_PORTRANGE_FROM))
+	return InitNetworkingCore(ip, port, port+uint16(ToxPortrangeTo-ToxPortrangeFrom))
 }
 
 func InitNetworkingCore(ip net.IP, port_from, port_to uint16) (*Networking_Core, error) {
 	if port_from == 0 && port_to == 0 {
-		port_from = TOX_PORTRANGE_FROM
-		port_to = TOX_PORTRANGE_TO
+		port_from = ToxPortrangeFrom
+		port_to = ToxPortrangeTo
 	} else if port_from == 0 && port_to != 0 {
 		port_from = port_to
 	} else if port_from != 0 && port_to == 0 {
@@ -182,10 +186,13 @@ func InitNetworkingCore(ip net.IP, port_from, port_to uint16) (*Networking_Core,
 		conn, err := net.ListenUDP("udp", udpAddr)
 		if err == nil {
 			f, _ := conn.File()
-
+			defer f.Close()
 			sock := int(f.Fd())
 			if len(ip) == net.IPv6len {
-				SetDualStack(conn)
+				err = SetDualStack(sock)
+				if err != nil {
+					return nil, err
+				}
 				var mreqAddr [16]byte
 				mreqAddr[0], mreqAddr[1], mreqAddr[15] = 0xFF, 0x02, 0x01
 
@@ -198,7 +205,7 @@ func InitNetworkingCore(ip net.IP, port_from, port_to uint16) (*Networking_Core,
 				}
 			}
 
-			if err = syscall.SetsockoptByte(sock, syscall.SOL_SOCKET, syscall.SO_BROADCAST, 1); err != nil {
+			if err = syscall.SetsockoptInt(sock, syscall.SOL_SOCKET, syscall.SO_BROADCAST, 1); err != nil {
 				return nil, err
 			}
 
@@ -214,11 +221,13 @@ func InitNetworkingCore(ip net.IP, port_from, port_to uint16) (*Networking_Core,
 			if err = conn.SetWriteBuffer(bufferSize); err != nil {
 				return nil, err
 			}
-			netCore.handlers = make(map[byte]Handler)
+			netCore.handlers = make(map[byte]PackageHandler)
 			netCore.ip = ip
 			netCore.port = p
 			netCore.coreAddr = udpAddr
 			netCore.Conn = conn
+			netCore.killChan = make(chan struct{})
+			netCore.killComplete = make(chan struct{})
 			return netCore, nil
 		}
 	}
@@ -228,19 +237,38 @@ func InitNetworkingCore(ip net.IP, port_from, port_to uint16) (*Networking_Core,
 	return nil, &NetError{"Couldn't bind to the specified ports", ip, port_from}
 }
 
-func (n *Networking_Core) KillNetworkingCore() {
-	n.isClosed = true
-	n.wg.Wait()
+func (n *Networking_Core) Kill() {
+	if n == nil {
+		return
+	}
+
 	if n.Conn != nil {
 		n.Conn.Close()
 	}
+
+	if n.isPollingStarted {
+		fmt.Println("Stopping poll goroutine")
+		n.killChan <- struct{}{}
+		<-n.killChan
+		close(n.killChan)
+	}
+	fmt.Println("Stopping networking core")
+	n.wg.Wait()
 }
 
-func (n *Networking_Core) AddHandler(start byte, handler PackageHandler, object interface{}) {
-	n.handlers[start] = Handler{handler, object}
+func (n *Networking_Core) AddHandler(start byte, handler PackageHandler) {
+	n.mutx.Lock()
+	defer n.mutx.Unlock()
+	n.handlers[start] = handler
 }
 
-func (n *Networking_Core) sendpacket(ip net.IP, port uint16, data []byte) error {
+func (n *Networking_Core) DeleteHandler(start byte) {
+	n.mutx.Lock()
+	defer n.mutx.Unlock()
+	delete(n.handlers, start)
+}
+
+func (n *Networking_Core) SendPacket(ip net.IP, port uint16, data []byte) error {
 	if n.Conn == nil {
 		return &NetError{"Networking core not initialized", nil, 0}
 	}
@@ -252,60 +280,78 @@ func (n *Networking_Core) sendpacket(ip net.IP, port uint16, data []byte) error 
 	sendAddr := new(net.UDPAddr)
 	sendAddr.IP = ip
 	sendAddr.Port = int(port)
-
-	if _, err := n.Conn.WriteToUDP(data, sendAddr); err != nil {
+	if _, err := n.Conn.WriteTo(data, sendAddr); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (n *Networking_Core) receivepacket(ip *net.IP, port *uint16, data *[]byte) (uint64, error) {
-	length, addr, err := n.Conn.ReadFromUDP(*data)
+func (n *Networking_Core) ReceivePacket() ([]byte, net.Addr, error) {
+	data := make([]byte, MaxUdpPacketSize)
+	length, addr, err := n.Conn.ReadFrom(data)
 	if err != nil {
-		return 0, nil
+		return nil, nil, err
 	}
+	data = data[:length]
 
-	*ip = addr.IP
-	*port = uint16(addr.Port)
-
-	return uint64(length), nil
+	return data, addr, nil
 }
 
-func (n *Networking_Core) networking_poll() {
+func (n *Networking_Core) Poll() {
 	if n.Conn == nil {
 		return
 	}
 
-	var ip net.IP
-	var port uint16
+	receivedDataChan := make(chan *receivedPacket)
+	polling := func() {
+		for {
+			data, addr, err := n.ReceivePacket()
+			opError, _ := err.(*net.OpError)
+			if opError != nil && opError.Err.Error() == "use of closed network connection" {
+				close(receivedDataChan)
+				fmt.Println("Socket closed")
+				return
+			} else if opError != nil {
+				fmt.Println("Error in receiving data from udp socket ", err)
+				return
+			}
+			udpAddr := addr.(*net.UDPAddr)
+			packet := &receivedPacket{data, udpAddr.IP, uint16(udpAddr.Port)}
+			receivedDataChan <- packet
+		}
 
+	}
+
+	n.isPollingStarted = true
+	go polling()
 	for {
-		if n.isClosed {
+		select {
+		case <-n.killChan:
+			fmt.Println("Polling finished")
+			n.killChan <- struct{}{}
 			return
-		}
+		case packet := <-receivedDataChan:
 
-		var data []byte
-		length, err := n.receivepacket(&ip, &port, &data)
-		if err != nil {
-			fmt.Println("Error in receiving data from udp socket")
-			return
-		}
+			if len(packet.data) == 0 {
+				continue
+			}
 
-		if length == 0 {
-			continue
-		}
+			//have to think of a better way to use mutexes and sem-chan
+			n.mutx.RLock()
+			handler, ok := n.handlers[packet.data[0]]
+			n.mutx.RUnlock()
+			if !ok {
+				fmt.Println("Unrecognised message")
+				continue
+			}
 
-		handler, ok := n.handlers[data[0]]
-		if !ok {
-			fmt.Println("Unrecognised message")
-			continue
+			packet.data = packet.data[1:]
+			n.wg.Add(1)
+			go func() {
+				handler(packet.data, packet.ip, packet.port)
+				n.wg.Done()
+			}()
 		}
-
-		n.wg.Add(1)
-		go func() {
-			handler.handlerFunc(handler.object, data, ip, port)
-			n.wg.Done()
-		}()
 	}
 }

@@ -251,7 +251,7 @@ func create_request(send_public_key, send_secret_key []byte, recv_public_key []b
 		return nil, err
 	}
 
-	packet[0] = NET_PACKET_CRYPTO
+	packet[0] = NetPacketCrypto
 	packet = append(packet, recv_public_key...)
 	packet = append(packet, send_public_key...)
 	packet = append(packet, nonce...)

@@ -1,17 +1,7 @@
-TODO:
--find license //done
--make readme
--make tests
--Actual work
-	- read more about tox
-	- echo bot
-	- connect 2 computers
-	- read and determine tox core features to implement
-	- find a way to get data from from tox nodes
-	- find a way to do the encryption
-	- make way to send simple messages
-	- make a GUI application
-	- stay calm during all of it (hard)
-	- make a group chat
-	- make a database for the chats
-	
+Какво трябва да направя?:
+0.Документация трябва да напиша.
+1.Трябва да видя как се прави tcp network и да го обединя в NetworkingCore
+2.Трябва да напиша тестове за това как се прави
+3.Трябвa да довърша DHT
+4.Tрябва да напиша тестове за LAN, DHT и CryptoCore
+5.Рефакториране на кода.
