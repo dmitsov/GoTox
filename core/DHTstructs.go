@@ -20,7 +20,7 @@ const (
 	LClientList      = LClientLength * LClientNodes // a list of clients mathematically closer to you
 
 	MaxCloseToBootstrapNodes = 8
-	MaxSentNodes             = 4 //max number of nodes to send with send nodes
+	MaxSendNodes             = 4 //max number of nodes to send with send nodes
 	PingTimout               = 5 //ping timeout in seconds
 	DHTPingArraySize         = 512
 
@@ -135,7 +135,7 @@ type DHTFriend struct {
 
 	callbacks []DHTFriendCallback
 
-	toBootstrap    []NodeFormat
+	toBootstrap    NodeList
 	numToBootstrap uint
 }
 
@@ -163,15 +163,15 @@ type CryptoPacketHandler struct {
 
 type DHT struct {
 	net                 *Networking_Core
-	closeClientList     []ClientData
+	closeClientList     ClientDataList
 	closeLastGetNodes   time.Time //time of last getnodes request
 	closeBootstrapTimes uint32
 
 	secretSymmetricKey []byte
 
 	//DHT keypair
-	selfPubclicKey []byte
-	selfSecretKey  []byte
+	selfPublicKey []byte
+	selfSecretKey []byte
 
 	friendList      []DHTFriend
 	loadedNodesList []NodeFormat
@@ -181,8 +181,8 @@ type DHT struct {
 
 	ping *Ping
 
-	dhtPingArray       PingArray
-	dhtHardenPingArray PingArray
+	pingArray       PingArray
+	hardenPingArray PingArray
 
 	assoc *Assoc
 

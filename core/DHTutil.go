@@ -65,7 +65,7 @@ func toNetFamily(ip net.IP) (int, error) {
 }
 
 //helper function for node lookup
-func ipportEqual(p1, p2 *net.UDPAddr) bool {
+func ipPortEqual(p1, p2 *net.UDPAddr) bool {
 
 	return len(p1.IP) == len(p2.IP) && p1.Port == p2.Port && p1.IP.Equal(p2.IP)
 }

@@ -1,11 +1,7 @@
 package core
 
 import (
-	"encoding/binary"
-	"fmt"
-	"github.com/GoKillers/libsodium-go/cryptobox"
 	"net"
-
 	"time"
 )
 
@@ -49,10 +45,10 @@ func (list ClientDataList) ClientOrIPPortInList(public_key []byte, ip_port *net.
 }
 
 //compare two DHT client data entries
-func compaerClientEntries(e1, e2 *ClientEntry, cmpPublicKey []byte) int {
+func compareClientEntries(e1, e2 ClientData, cmpPublicKey []byte) int {
 
-	b1 := isTimeout(cl[i].assoc4.timestamp, BadNodeTimeout) && isTimeout(cl[i].assoc6.timestamp, BadNodeTimeout)
-	b2 := isTimeout(cl[j].assoc4.timestamp, BadNodeTimeout) && isTimeout(cl[j].assoc6.timestamp, BadNodeTimeout)
+	b1 := isTimeout(e1.assoc4.timestamp, BadNodeTimeout) && isTimeout(e1.assoc6.timestamp, BadNodeTimeout)
+	b2 := isTimeout(e2.assoc4.timestamp, BadNodeTimeout) && isTimeout(e2.assoc6.timestamp, BadNodeTimeout)
 
 	if b1 && b2 {
 		return 0
@@ -66,10 +62,10 @@ func compaerClientEntries(e1, e2 *ClientEntry, cmpPublicKey []byte) int {
 		return 1
 	}
 
-	t1 := hardeningCorrect(cl[i].assoc4.hardening) != HardeningAllOk &&
-		hardeningCorrect(cl[i].assoc6.hardening) != HardeningALlOk
-	t2 := hardeningCorrect(cl[j].assoc4.hardening) != HardeningAllOk &&
-		hardeningCorrect(cl[j].assoc6.hardening) != HardeningAllOk
+	t1 := hardeningCorrect(e1.assoc4.hardening) != HardeningAllOk &&
+		hardeningCorrect(e1.assoc6.hardening) != HardeningALlOk
+	t2 := hardeningCorrect(e2.assoc4.hardening) != HardeningAllOk &&
+		hardeningCorrect(e2.assoc6.hardening) != HardeningAllOk
 
 	if t1 != t2 {
 		if t1 {
@@ -94,7 +90,7 @@ func compaerClientEntries(e1, e2 *ClientEntry, cmpPublicKey []byte) int {
 	return 0
 }
 
-func isOkStoreNode(clientData *ClientData, public_key, cmp_publicKey []byte) bool {
+func (clientData *ClientData) isStoreNodeOk(public_key, cmp_publicKey []byte) bool {
 	if (isTimeout(clientData.assoc4.timestamp, BadNodeTimeout) && isTimeout(clientData.assoc6.timestamp, BadNodeTimeout)) ||
 		idClosest(cmp_publicKey, clientData.public_key, public_key) == 2 {
 		return true

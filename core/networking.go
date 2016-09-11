@@ -355,3 +355,16 @@ func (n *Networking_Core) Poll() {
 		}
 	}
 }
+
+func ipIsset(ip net.IP) bool {
+	var isValid bool = len(ip) == net.IPv4len || len(ip) == net.IPv6len
+	if isValid {
+		isValid = !ip.Equal(net.IPv4Zero) && !ip.Equal(net.IPv6Zero)
+	}
+
+	return isValid
+}
+
+func ipPortIsSet(ipPort *net.UDPAddr) bool {
+	return ipPort.Port > 0 && ipIsset(ipPort.IP)
+}

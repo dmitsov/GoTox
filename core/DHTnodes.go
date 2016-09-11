@@ -5,10 +5,7 @@ import (
 	"fmt"
 	"github.com/GoKillers/libsodium-go/cryptobox"
 	"net"
-
-	"time"
 )
-
 
 //Function for packing nodes in network format. Used
 //to serealize nodes in binary format in order send
@@ -93,7 +90,6 @@ func unpackNodes(data []byte) ([]NodeFormat, error) {
 	return nodes, nil
 }
 
-
 //Returns true if there is a node in the with the same public_key
 //in the nodeList
 func (n NodeList) ClientInNodeList(public_key []byte) bool {
@@ -105,7 +101,6 @@ func (n NodeList) ClientInNodeList(public_key []byte) bool {
 
 	return false
 }
-
 
 //function for adding a node to a specific nodeList
 func (n NodeList) addToList(public_key []byte, addr *net.UDPAddr, cmp_pk []byte) {
@@ -126,12 +121,11 @@ func (n NodeList) addToList(public_key []byte, addr *net.UDPAddr, cmp_pk []byte)
 	}
 }
 
-
 //a helper function for GetCloseNodes
 //what it does is fill the the nodelist with the closest nodes
 //not counting those that are in the LAN
 func getCloseNodesInner(public_key []byte, nodes NodeList, clients ClientDataList, saFamily byte, isLan, wantGood bool) NodeList {
-	
+
 	if saFamily != syscall.AF_INET && saFamily != syscall.AF_INET6 && saFamily != 0 {
 		return nil
 	}
@@ -176,5 +170,3 @@ func getCloseNodesInner(public_key []byte, nodes NodeList, clients ClientDataLis
 
 	return nodes
 }
-
-

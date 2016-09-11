@@ -1,0 +1,25 @@
+При създаването на DHT обект, се създава нов ping array
+Регистрират се handlers за различни requesti: sendnodes, getnodes
+Предаване на криптираща информация cryptopacket handle, NAT punching handle и hardening
+Hardening handle
+
+задачи с висок приоритет:
+-разбери как работи hardening
+-разбери как работи и какво е NAT punching
+
+doHardening:
+ праща hardening request на random node ако hardening времето за този node
+ e минало
+
+sendHardeningRequest
+
+TODO:
+- implement NAT
+	- finish rout_to_friend DONE
+	- finish sendNATPing DONE
+	- finish NAT request handling DONE
+	- implement Ping functionality
+
+		-look into c struct padding
+		-implement data serialization to comply with c toxcore serialization
+	- implement hole punching WIP

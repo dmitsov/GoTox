@@ -58,7 +58,7 @@ func crypto_verify_16(x, y []byte) int {
 }
 
 //wrapper for crypto_verify_32
-func public_key_cmp(k1, k2 []byte) bool {
+func publicKeyCmp(k1, k2 []byte) bool {
 	return crypto_verify_32(k1, k2) == 0
 }
 

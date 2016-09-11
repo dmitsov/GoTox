@@ -1,0 +1,6 @@
+1. Find a way to get the network ip addresses and masks
+ - how to do that? Трябва да взема network адресите от 
+   от interface. И ip маската от тях също. Moже да взема
+   network адреса и лokaлния адрес и по този начин да намеря маската
+   като ги сравнявам бит по бит за да извлека маската. Така за всеки такъв адрес
+   

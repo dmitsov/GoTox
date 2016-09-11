@@ -1,18 +1,14 @@
 package core
 
 import (
-	"encoding/binary"
-	"fmt"
 	"github.com/GoKillers/libsodium-go/cryptobox"
-	"net"
-
 	"time"
 )
 
 /* Getting a shared key from a SharedKeys containers and if there is no such key
  * for secretKey,publicKey pair generate one. Probably should try to write some DRY code here
  */
-func (s SharedKeys) GetSharedKey(secretKey, publicKey []byte) ([]byte, error) {
+func (s SharedKeys) GetSharedKey(publicKey []byte, secretKey []byte) ([]byte, error) {
 	var num uint32 = (1 << 32) - 1
 	var curr int
 	var sharedKey []byte
@@ -44,6 +40,9 @@ func (s SharedKeys) GetSharedKey(secretKey, publicKey []byte) ([]byte, error) {
 		}
 	}
 
+	if secretKey == nil {
+		return nil, &DHTError{"GetSharedKey: can not create new sharedKey"}
+	}
 	sharedKey, err := encrypt_precompute(publicKey, secretKey)
 
 	if err != nil {
